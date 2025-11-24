@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Gundam Space Defense</title>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'gundam-blue': '#0057b7',
+                        'gundam-red': '#e60012',
+                        'gundam-gold': '#ffd700',
+                        'gundam-dark': '#1a1a2e',
+                        'hud-cyan': '#00f0ff',
+                    },
+                    fontFamily: {
+                        'mono': ['Courier New', 'monospace'],
+                    },
+                    animation: {
+                        'pulse-fast': 'pulse 0.5s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                        'shake': 'shake 0.5s cubic-bezier(.36,.07,.19,.97) both',
+                    },
+                    keyframes: {
+                        shake: {
+                            '10%, 90%': { transform: 'translate3d(-1px, 0, 0)' },
+                            '20%, 80%': { transform: 'translate3d(2px, 0, 0)' },
+                            '30%, 50%, 70%': { transform: 'translate3d(-4px, 0, 0)' },
+                            '40%, 60%': { transform: 'translate3d(4px, 0, 0)' }
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        body {
+            background-color: #0f0f1a;
+            color: white;
+            overflow: hidden; /* Prevent scrolling */
+            touch-action: none; /* Prevent touch gestures */
+        }
+        .scanline {
+            background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,0) 50%, rgba(0,0,0,0.2) 50%, rgba(0,0,0,0.2));
+            background-size: 100% 4px;
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            pointer-events: none;
+            z-index: 50;
+        }
+        .crt-flicker {
+            animation: flicker 0.15s infinite;
+            pointer-events: none;
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(18, 16, 16, 0.1);
+            opacity: 0.1;
+            z-index: 50;
+        }
+        @keyframes flicker {
+            0% { opacity: 0.05; }
+            50% { opacity: 0.1; }
+            100% { opacity: 0.05; }
+        }
+        /* Custom Scrollbar for Report */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1a1a2e; }
+        ::-webkit-scrollbar-thumb { background: #0057b7; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useCallback } = React;
+
+        // --- Game Data ---
+        const TOPICS = [
+            {
+                id: 1,
+                title: "Friendly Chat",
+                briefing: { en: "Meet a new friend!", ar: "قابل صديقًا جديدًا!" },
+                questions: [
+                    { q: "Hello! What is your name?", correct: "My name is Sarah.", wrongs: ["I am fine.", "Good bye."] },
+                    { q: "How are you?", correct: "I'm fine, thanks.", wrongs: ["I am Sarah.", "Yes, I do."] },
+                    { q: "Where are you from?", correct: "I am from Japan.", wrongs: ["I like sushi.", "It is red."] },
+                    { q: "Nice to meet you.", correct: "Nice to meet you too.", wrongs: ["I am hungry.", "No thanks."] },
+                    { q: "How old are you?", correct: "I am 10 years old.", wrongs: ["I am fine.", "It is 10 o'clock."] }
+                ]
+            },
+            {
+                id: 2,
+                title: "At Home",
+                briefing: { en: "Family talk.", ar: "حديث عائلي." },
+                questions: [
+                    { q: "Do you have homework?", correct: "Yes, I do.", wrongs: ["I am home.", "No, I am."] },
+                    { q: "What is for dinner?", correct: "We are having rice.", wrongs: ["It is 7 pm.", "I like blue."] },
+                    { q: "How was school?", correct: "It was fun!", wrongs: ["I am school.", "Yes, please."] },
+                    { q: "Clean your room.", correct: "Okay, mom.", wrongs: ["I am clean.", "Thank you."] },
+                    { q: "Good night.", correct: "Sweet dreams.", wrongs: ["Good morning.", "Hello."] }
+                ]
+            },
+            {
+                id: 3,
+                title: "The Interview",
+                briefing: { en: "Formal Interview.", ar: "مقابلة رسمية." },
+                questions: [
+                    { q: "Tell me about yourself.", correct: "I am a student.", wrongs: ["I am happy.", "Yes, I can."] },
+                    { q: "Where do you live?", correct: "I live in Tokyo.", wrongs: ["I live in a car.", "I like Tokyo."] },
+                    { q: "What is your goal?", correct: "To be a pilot.", wrongs: ["I am a pilot.", "Yes, I do."] },
+                    { q: "What are your skills?", correct: "I can code.", wrongs: ["I like pizza.", "No, I don't."] },
+                    { q: "Why do you want this?", correct: "I love space.", wrongs: ["I hate space.", "I am space."] }
+                ]
+            }
+        ];
+
+        // --- Audio System ---
+        const AudioSys = {
+            ctx: null,
+            init: () => {
+                if (!AudioSys.ctx) {
+                    AudioSys.ctx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+            },
+            playTone: (freq, type, duration) => {
+                if (!AudioSys.ctx) return;
+                const osc = AudioSys.ctx.createOscillator();
+                const gain = AudioSys.ctx.createGain();
+                osc.type = type;
+                osc.frequency.setValueAtTime(freq, AudioSys.ctx.currentTime);
+                gain.gain.setValueAtTime(0.1, AudioSys.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, AudioSys.ctx.currentTime + duration);
+                osc.connect(gain);
+                gain.connect(AudioSys.ctx.destination);
+                osc.start();
+                osc.stop(AudioSys.ctx.currentTime + duration);
+            },
+            playLaser: () => AudioSys.playTone(800, 'sawtooth', 0.1),
+            playExplosion: () => {
+                if (!AudioSys.ctx) return;
+                const osc = AudioSys.ctx.createOscillator();
+                const gain = AudioSys.ctx.createGain();
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(100, AudioSys.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(0.01, AudioSys.ctx.currentTime + 0.3);
+                gain.gain.setValueAtTime(0.2, AudioSys.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, AudioSys.ctx.currentTime + 0.3);
+                osc.connect(gain);
+                gain.connect(AudioSys.ctx.destination);
+                osc.start();
+                osc.stop(AudioSys.ctx.currentTime + 0.3);
+            },
+            speak: (text) => {
+                window.speechSynthesis.cancel();
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = 'en-US';
+                utterance.rate = 0.9;
+                window.speechSynthesis.speak(utterance);
+            }
+        };
+
+        // --- Components ---
+
+        const Button = ({ onClick, children, className = "", color = "blue" }) => {
+            const colors = {
+                blue: "bg-gundam-blue border-hud-cyan text-white hover:bg-blue-600",
+                red: "bg-gundam-red border-red-400 text-white hover:bg-red-600",
+                gold: "bg-gundam-gold border-yellow-200 text-black hover:bg-yellow-400",
+            };
+            return (
+                <button 
+                    onClick={onClick}
+                    className={`px-6 py-3 rounded-sm border-2 font-bold uppercase tracking-widest transition-all active:scale-95 shadow-[0_0_10px_rgba(0,240,255,0.5)] ${colors[color]} ${className}`}
+                >
+                    {children}
+                </button>
+            );
+        };
+
+        const MainMenu = ({ onStart, difficulty, setDifficulty }) => (
+            <div className="flex flex-col items-center justify-center h-full space-y-8 text-center animate-fadeIn">
+                <h1 className="text-5xl font-black text-transparent bg-clip-text bg-gradient-to-b from-white to-gundam-blue drop-shadow-[0_0_10px_rgba(0,87,183,0.8)]">
+                    GUNDAM<br/>DEFENSE
+                </h1>
+                <div className="p-6 border-2 border-hud-cyan bg-gundam-dark/80 backdrop-blur-sm rounded-lg max-w-xs w-full">
+                    <p className="text-hud-cyan mb-4 text-sm tracking-widest">SYSTEM ONLINE</p>
+                    <div className="flex justify-center space-x-4 mb-6">
+                        <button 
+                            onClick={() => setDifficulty('easy')}
+                            className={`px-4 py-2 border ${difficulty === 'easy' ? 'bg-green-600 border-green-400' : 'border-gray-600 text-gray-400'}`}
+                        >
+                            EASY
+                        </button>
+                        <button 
+                            onClick={() => setDifficulty('hard')}
+                            className={`px-4 py-2 border ${difficulty === 'hard' ? 'bg-red-600 border-red-400' : 'border-gray-600 text-gray-400'}`}
+                        >
+                            HARD
+                        </button>
+                    </div>
+                    <Button onClick={onStart} color="gold" className="w-full">Launch</Button>
+                </div>
+            </div>
+        );
+
+        const MissionSelect = ({ onSelect }) => (
+            <div className="flex flex-col items-center justify-center h-full p-4">
+                <h2 className="text-3xl font-bold text-white mb-8 tracking-widest border-b-2 border-gundam-gold pb-2">MISSION SELECT</h2>
+                <div className="grid gap-4 w-full max-w-sm">
+                    {TOPICS.map(topic => (
+                        <button 
+                            key={topic.id}
+                            onClick={() => onSelect(topic)}
+                            className="group relative p-4 border-2 border-hud-cyan bg-gundam-dark/90 hover:bg-gundam-blue/20 transition-all text-left overflow-hidden"
+                        >
+                            <div className="absolute top-0 right-0 p-1 bg-hud-cyan text-black text-xs font-bold">MS-{topic.id}00</div>
+                            <h3 className="text-xl font-bold text-white group-hover:text-hud-cyan">{topic.title}</h3>
+                            <p className="text-gray-400 text-sm">{topic.briefing.en}</p>
+                        </button>
+                    ))}
+                </div>
+            </div>
+        );
+
+        const Briefing = ({ topic, onConfirm }) => (
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/90 p-4">
+                <div className="border-4 border-gundam-gold bg-gundam-dark p-6 max-w-md w-full text-center shadow-[0_0_30px_rgba(255,215,0,0.3)]">
+                    <h2 className="text-2xl font-bold text-gundam-gold mb-4">MISSION BRIEFING</h2>
+                    <div className="mb-6 space-y-4 text-lg">
+                        <p className="text-white">{topic.briefing.en}</p>
+                        <p className="text-hud-cyan font-bold text-xl" dir="rtl">{topic.briefing.ar}</p>
+                    </div>
+                    <Button onClick={onConfirm} color="blue" className="w-full animate-pulse">ENGAGE</Button>
+                </div>
+            </div>
+        );
+
+        const GameLoop = ({ topic, difficulty, onEnd }) => {
+            const [playerX, setPlayerX] = useState(50); // Percentage 0-100
+            const [bullets, setBullets] = useState([]);
+            const [enemies, setEnemies] = useState([]);
+            const [score, setScore] = useState(0);
+            const [qIndex, setQIndex] = useState(0);
+            const [gameState, setGameState] = useState('playing'); // playing, shake
+            const [report, setReport] = useState([]);
+            const [spawnTimer, setSpawnTimer] = useState(0);
+            
+            const gameAreaRef = useRef(null);
+            const requestRef = useRef();
+            const lastTimeRef = useRef();
+            const playerSpeed = 1.5; // Movement speed
+            const bulletSpeed = 2;
+            const enemySpeed = difficulty === 'hard' ? 0.4 : 0.2;
+
+            // Current Question
+            const currentQ = topic.questions[qIndex];
+
+            // Spawn Enemies for current question
+            useEffect(() => {
+                if (!currentQ) {
+                    onEnd(report, score);
+                    return;
+                }
+
+                AudioSys.speak(currentQ.q);
+
+                // Prepare answers: 1 correct, 2 wrong
+                const answers = [
+                    { text: currentQ.correct, isCorrect: true },
+                    { text: currentQ.wrongs[0], isCorrect: false },
+                    { text: currentQ.wrongs[1], isCorrect: false }
+                ].sort(() => Math.random() - 0.5);
+
+                // Spawn 3 enemies at different X positions
+                const newEnemies = answers.map((ans, i) => ({
+                    id: Date.now() + i,
+                    x: 20 + (i * 30), // 20%, 50%, 80%
+                    y: -20, // Start above screen
+                    text: ans.text,
+                    isCorrect: ans.isCorrect
+                }));
+                
+                setEnemies(newEnemies);
+            }, [qIndex]);
+
+            // Game Loop
+            const update = useCallback((time) => {
+                if (lastTimeRef.current != undefined) {
+                    const deltaTime = time - lastTimeRef.current;
+                    
+                    // Move Bullets
+                    setBullets(prev => prev
+                        .map(b => ({ ...b, y: b.y - bulletSpeed }))
+                        .filter(b => b.y > -10)
+                    );
+
+                    // Move Enemies
+                    setEnemies(prev => {
+                        const nextEnemies = prev.map(e => ({ ...e, y: e.y + enemySpeed }));
+                        
+                        // Check if enemies passed player (Game Over condition or just miss?)
+                        // For this educational game, let's just loop them or fail?
+                        // Let's make them loop if missed, but that might be annoying.
+                        // Let's just let them fall and respawn same question? Or count as wrong?
+                        // Simple: If they go off screen, respawn them at top? 
+                        // Let's just keep them falling. If all fall off, maybe reset?
+                        // For simplicity: If Y > 100, reset Y to -20.
+                        return nextEnemies.map(e => e.y > 100 ? { ...e, y: -20 } : e);
+                    });
+                }
+                lastTimeRef.current = time;
+                requestRef.current = requestAnimationFrame(update);
+            }, [enemySpeed]);
+
+            useEffect(() => {
+                requestRef.current = requestAnimationFrame(update);
+                return () => cancelAnimationFrame(requestRef.current);
+            }, [update]);
+
+            // Collision Detection
+            useEffect(() => {
+                bullets.forEach(b => {
+                    enemies.forEach(e => {
+                        // Simple AABB collision (coordinates are %)
+                        // Convert % to approximate aspect ratio units if needed, but simple distance works
+                        // Hitbox: X +/- 10%, Y +/- 5%
+                        if (Math.abs(b.x - e.x) < 10 && Math.abs(b.y - e.y) < 8) {
+                            handleHit(b.id, e);
+                        }
+                    });
+                });
+            }, [bullets, enemies]);
+
+            const handleHit = (bulletId, enemy) => {
+                // Remove bullet
+                setBullets(prev => prev.filter(b => b.id !== bulletId));
+
+                if (enemy.isCorrect) {
+                    // Correct!
+                    AudioSys.playExplosion();
+                    setScore(s => s + 100);
+                    setReport(prev => [...prev, { q: currentQ.q, a: enemy.text, result: 'correct' }]);
+                    
+                    // Next Question
+                    if (qIndex < topic.questions.length - 1) {
+                        setQIndex(prev => prev + 1);
+                    } else {
+                        // End Level
+                        onEnd([...report, { q: currentQ.q, a: enemy.text, result: 'correct' }], score + 100);
+                    }
+                } else {
+                    // Wrong!
+                    AudioSys.playTone(150, 'sawtooth', 0.3); // Error buzz
+                    setGameState('shake');
+                    setTimeout(() => setGameState('playing'), 500);
+                    
+                    // Remove that enemy only? Or reset?
+                    // Let's remove that enemy to clear screen clutter
+                    setEnemies(prev => prev.filter(e => e.id !== enemy.id));
+                    
+                    // Record wrong answer
+                    setReport(prev => [...prev, { q: currentQ.q, a: enemy.text, result: 'wrong', correct: currentQ.correct }]);
+                }
+            };
+
+            // Controls
+            const handleMove = (dir) => {
+                setPlayerX(prev => Math.max(10, Math.min(90, prev + (dir * 5))));
+            };
+
+            const handleFire = () => {
+                AudioSys.playLaser();
+                setBullets(prev => [...prev, { id: Date.now(), x: playerX, y: 80 }]);
+            };
+
+            // Keyboard
+            useEffect(() => {
+                const handleKeyDown = (e) => {
+                    if (e.key === 'ArrowLeft') handleMove(-1);
+                    if (e.key === 'ArrowRight') handleMove(1);
+                    if (e.key === ' ') handleFire();
+                };
+                window.addEventListener('keydown', handleKeyDown);
+                return () => window.removeEventListener('keydown', handleKeyDown);
+            }, [playerX]); // Dep on playerX for state updates? No, setter uses callback.
+
+            return (
+                <div className={`relative w-full h-full overflow-hidden bg-space ${gameState === 'shake' ? 'animate-shake bg-red-900/20' : ''}`}>
+                    {/* HUD Header */}
+                    <div className="absolute top-0 left-0 right-0 p-2 flex justify-between items-start z-10 bg-gradient-to-b from-black/80 to-transparent">
+                        <div className="text-hud-cyan font-mono text-sm">
+                            SCORE: {score.toString().padStart(6, '0')}<br/>
+                            WAVE: {qIndex + 1}/{topic.questions.length}
+                        </div>
+                        <div className="text-white font-bold text-center bg-blue-900/50 px-4 py-1 rounded border border-blue-400">
+                            {currentQ?.q}
+                        </div>
+                        <div className="text-gundam-gold font-mono text-sm text-right">
+                            SYS: ONLINE<br/>
+                            DIFF: {difficulty.toUpperCase()}
+                        </div>
+                    </div>
+
+                    {/* Game Area */}
+                    <div className="absolute inset-0 z-0">
+                        {/* Enemies */}
+                        {enemies.map(e => (
+                            <div 
+                                key={e.id}
+                                className="absolute flex flex-col items-center justify-center w-24 text-center transition-transform duration-100"
+                                style={{ left: `${e.x}%`, top: `${e.y}%`, transform: 'translate(-50%, -50%)' }}
+                            >
+                                <div className="bg-white/10 border border-red-500 text-white text-xs p-1 mb-1 rounded backdrop-blur-md max-w-[120px] break-words">
+                                    {e.text}
+                                </div>
+                                {/* Drone Graphic */}
+                                <div className="w-8 h-8 bg-red-600 rounded-full shadow-[0_0_10px_red] animate-pulse relative">
+                                    <div className="absolute inset-2 border border-black rounded-full"></div>
+                                </div>
+                            </div>
+                        ))}
+
+                        {/* Bullets */}
+                        {bullets.map(b => (
+                            <div 
+                                key={b.id}
+                                className="absolute w-1 h-4 bg-hud-cyan shadow-[0_0_8px_cyan]"
+                                style={{ left: `${b.x}%`, top: `${b.y}%`, transform: 'translate(-50%, -50%)' }}
+                            />
+                        ))}
+
+                        {/* Player Mecha */}
+                        <div 
+                            className="absolute bottom-20 w-12 h-12 transition-all duration-75"
+                            style={{ left: `${playerX}%`, transform: 'translateX(-50%)' }}
+                        >
+                            {/* Simple CSS Mecha */}
+                            <div className="w-full h-full relative">
+                                <div className="absolute bottom-0 w-full h-3/4 bg-gundam-blue rounded-t-lg border-2 border-white"></div>
+                                <div className="absolute -top-2 left-1/2 -translate-x-1/2 w-6 h-6 bg-white rounded border border-gray-400"></div>
+                                <div className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-1 bg-gundam-gold"></div>
+                                <div className="absolute bottom-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-hud-cyan shadow-[0_0_5px_cyan]"></div>
+                            </div>
+                            {/* Thruster */}
+                            <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-4 h-6 bg-orange-500 blur-sm animate-pulse"></div>
+                        </div>
+                    </div>
+
+                    {/* Mobile Controls */}
+                    <div className="absolute bottom-0 left-0 right-0 h-20 bg-black/50 backdrop-blur flex items-center justify-between px-4 pb-2 z-20 md:hidden">
+                        <div className="flex space-x-4">
+                            <button 
+                                className="w-16 h-16 bg-gray-800/80 border-2 border-gray-500 rounded-full text-white text-2xl active:bg-hud-cyan/50"
+                                onPointerDown={() => handleMove(-1)}
+                            >
+                                ←
+                            </button>
+                            <button 
+                                className="w-16 h-16 bg-gray-800/80 border-2 border-gray-500 rounded-full text-white text-2xl active:bg-hud-cyan/50"
+                                onPointerDown={() => handleMove(1)}
+                            >
+                                →
+                            </button>
+                        </div>
+                        <button 
+                            className="w-20 h-20 bg-red-900/80 border-2 border-red-500 rounded-full text-white font-bold tracking-widest active:bg-red-500 active:scale-95 transition-all shadow-[0_0_15px_red]"
+                            onPointerDown={handleFire}
+                        >
+                            FIRE
+                        </button>
+                    </div>
+                    
+                    {/* PC Hint */}
+                    <div className="hidden md:block absolute bottom-2 left-0 right-0 text-center text-gray-500 text-xs">
+                        ARROWS to Move • SPACE to Shoot
+                    </div>
+                </div>
+            );
+        };
+
+        const MissionReport = ({ report, score, onHome }) => (
+            <div className="flex flex-col items-center h-full p-4 animate-fadeIn">
+                <h2 className="text-3xl font-bold text-gundam-gold mb-2">MISSION COMPLETE</h2>
+                <div className="text-xl text-white mb-6">FINAL SCORE: {score}</div>
+                
+                <div className="w-full max-w-md bg-gundam-dark border border-gray-700 rounded-lg overflow-hidden flex-1 flex flex-col mb-4">
+                    <div className="bg-gray-800 p-2 grid grid-cols-12 gap-2 text-xs font-bold text-gray-400 uppercase tracking-wider">
+                        <div className="col-span-1">#</div>
+                        <div className="col-span-5">Question</div>
+                        <div className="col-span-4">Your Answer</div>
+                        <div className="col-span-2 text-center">Res</div>
+                    </div>
+                    <div className="overflow-y-auto p-2 space-y-2">
+                        {report.map((item, i) => (
+                            <div key={i} className="grid grid-cols-12 gap-2 text-sm border-b border-gray-800 pb-2 last:border-0">
+                                <div className="col-span-1 text-gray-500">{i+1}</div>
+                                <div className="col-span-5 text-white">{item.q}</div>
+                                <div className="col-span-4">
+                                    <div className={item.result === 'correct' ? 'text-green-400' : 'text-red-400'}>{item.a}</div>
+                                    {item.result === 'wrong' && (
+                                        <div className="text-xs text-gundam-gold mt-1">Correct: {item.correct}</div>
+                                    )}
+                                </div>
+                                <div className="col-span-2 text-center">
+                                    {item.result === 'correct' ? (
+                                        <span className="text-green-500">✔</span>
+                                    ) : (
+                                        <span className="text-red-500">✘</span>
+                                    )}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+                
+                <Button onClick={onHome} color="blue" className="w-full max-w-xs">Return to Base</Button>
+            </div>
+        );
+
+        const App = () => {
+            const [screen, setScreen] = useState('menu'); // menu, select, briefing, game, report
+            const [difficulty, setDifficulty] = useState('easy');
+            const [selectedTopic, setSelectedTopic] = useState(null);
+            const [finalScore, setFinalScore] = useState(0);
+            const [reportData, setReportData] = useState([]);
+
+            useEffect(() => {
+                AudioSys.init();
+            }, []);
+
+            const startGame = (topic) => {
+                setSelectedTopic(topic);
+                setScreen('briefing');
+            };
+
+            const confirmBriefing = () => {
+                setScreen('game');
+            };
+
+            const endGame = (report, score) => {
+                setReportData(report);
+                setFinalScore(score);
+                setScreen('report');
+            };
+
+            return (
+                <div className="w-full h-screen bg-gray-900 flex justify-center items-center font-sans">
+                    {/* Mobile Container */}
+                    <div className="relative w-full max-w-md h-full max-h-[900px] bg-[#0f0f1a] shadow-2xl overflow-hidden border-x-2 border-gray-800">
+                        {/* CRT Effects */}
+                        <div className="scanline"></div>
+                        <div className="crt-flicker"></div>
+                        
+                        {screen === 'menu' && (
+                            <MainMenu 
+                                onStart={() => setScreen('select')} 
+                                difficulty={difficulty} 
+                                setDifficulty={setDifficulty} 
+                            />
+                        )}
+                        
+                        {screen === 'select' && (
+                            <MissionSelect onSelect={startGame} />
+                        )}
+
+                        {screen === 'briefing' && selectedTopic && (
+                            <Briefing topic={selectedTopic} onConfirm={confirmBriefing} />
+                        )}
+
+                        {screen === 'game' && selectedTopic && (
+                            <GameLoop 
+                                topic={selectedTopic} 
+                                difficulty={difficulty} 
+                                onEnd={endGame} 
+                            />
+                        )}
+
+                        {screen === 'report' && (
+                            <MissionReport 
+                                report={reportData} 
+                                score={finalScore} 
+                                onHome={() => setScreen('menu')} 
+                            />
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
